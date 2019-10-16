@@ -1,2 +1,2 @@
 # GCP_Pilot_CG
-Samples for Data Ingestion in to BigQuery Tables.
+Samples for ETL Transformations in to BigQuery Tables through Cloud DataFlow.
