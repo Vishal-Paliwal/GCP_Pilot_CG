@@ -13,7 +13,7 @@ dataflow_options = {'--project=automatic-asset-253215',
                     '--staging_location=gs://raw_source_files/Customers/temp/stg'}
 options = PipelineOptions(dataflow_options)
 gcloud_options = options.view_as(GoogleCloudOptions)
-options.view_as(StandardOptions).runner = 'dataflow'
+options.view_as(StandardOptions).runner = 'direct'
 
 
 def printval(value):
@@ -75,24 +75,26 @@ class UnnestCoGrouped(beam.DoFn):
 
 def run():
     p = beam.Pipeline(options=options)
-    src_pipeline = 'CustOrg_ID'
+    src_pipeline = 'IMCust_ID'
+    IMCust_ID = (p
+                 | 'Reading Cust_ID' >> beam.io.Read(
+                beam.io.BigQuerySource(
+                    query="""SELECT CUSTOMER_ID
+                                           FROM `automatic-asset-253215.CORE.IM_CUSTOMER_ATTRIBUTE_REF`""",
+                    use_standard_sql=True))
+                 )
+
+    join_pipeline = 'CustOrg_ID'
     CustOrg_ID = (p
                   | 'Reading HSN_ID' >> beam.io.Read(
                 beam.io.BigQuerySource(
                     query="""SELECT HSN_ACCT_NUM AS CUSTOMER_ID 
-                                       FROM `automatic-asset-253215.STAGE.STG_CLIC_CUSTSORGEXT`""",
+                                           FROM `automatic-asset-253215.STAGE.STG_CLIC_CUSTSORGEXT`""",
                     use_standard_sql=True))
                   )
-    join_pipeline = 'IMCust_ID'
-    IMCust_ID = (p
-                 | 'Reading Cust_ID' >> beam.io.Read(
-                beam.io.BigQuerySource(
-                    query="""SELECT CUSTOMER_ID, CUSTOMER_KEY
-                                       FROM `automatic-asset-253215.CORE.IM_CUSTOMER_ATTRIBUTE_REF`""",
-                    use_standard_sql=True))
-                 )
+
     common_key = 'CUSTOMER_ID'
-    pipelines_dictionary = {src_pipeline:CustOrg_ID,join_pipeline:IMCust_ID}
+    pipelines_dictionary = {src_pipeline:IMCust_ID,join_pipeline:CustOrg_ID}
     print('start')
     read_query = """SELECT
           CAST(a.HSN_ACCT_NUM AS INT64) AS CUSTOMER_ID,
@@ -131,16 +133,16 @@ def run():
        """
 
     join_data = (pipelines_dictionary
-                 | 'Left join' >> LeftJoin(src_pipeline,CustOrg_ID,join_pipeline,IMCust_ID,common_key)
+                 | 'Left join' >> LeftJoin(src_pipeline,IMCust_ID,join_pipeline,CustOrg_ID,common_key)
                  | 'Convert to List' >> beam.combiners.ToList()
                  | 'Fetching Values' >> beam.ParDo(FetchValue())
                  | 'Again Convert to List' >> beam.combiners.ToList()
-                 | 'Reading query' >> beam.Map(lambda x:read_query.format(','.join(map(lambda x:'"' + x + '"',x))))
+                 | 'Reading query' >> beam.Map(lambda x:read_query.format(','.join(map(lambda x:'"' + str(x) + '"',x))))
                  # | 'print' >> beam.ParDo(printval)
                  | 'Write to IM_CUSTOMER_ATTRIBUTE_REF' >> beam.io.WriteToBigQuery(
-                                                       output_table,
-                                                       write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-                                                       create_disposition=beam.io.BigQueryDisposition.CREATE_NEVER)
+                                                      output_table,
+                                                      write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+                                                      create_disposition=beam.io.BigQueryDisposition.CREATE_NEVER)
 
                  )
     p.run().wait_until_finish()
